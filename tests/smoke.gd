@@ -7,6 +7,12 @@ func _init() -> void:
 	root.add_child(game)
 	assert(game.realm_index == 0, "初始境界应为炼气")
 	assert(game.active_herbs.size() == 5, "地图应有五株灵草")
+	assert(game.enemies.size() == 3, "初始应有三只妖兽")
+	game.enemies[0] = game.player + Vector2(20, 0)
+	game.enemy_hps[0] = 1
+	game._attack()
+	assert(game.enemies.size() == 2, "攻击应能击败妖兽")
+	assert(game.spirit_stones == 12, "击败妖兽应获得灵石")
 	game.player = game.ALTAR
 	game._cultivate()
 	assert(game.qi == 12, "第一次修炼应获得 12 点灵力")

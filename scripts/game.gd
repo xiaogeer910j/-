@@ -2,10 +2,13 @@ extends Node2D
 
 const WORLD_SIZE := Vector2(1600.0, 1000.0)
 const PLAYER_SPEED := 240.0
+const ENEMY_SPEED := 72.0
+const MAX_HEALTH := 10
 const REALMS: Array[String] = ["炼气", "筑基", "金丹", "元婴", "化神"]
 const ALTAR := Vector2(800.0, 470.0)
 const MERCHANT := Vector2(1060.0, 470.0)
 const HERB_POINTS: Array[Vector2] = [Vector2(420, 300), Vector2(580, 760), Vector2(1180, 240), Vector2(1330, 720), Vector2(300, 830)]
+const ENEMY_STARTS: Array[Vector2] = [Vector2(650, 650), Vector2(980, 760), Vector2(650, 280)]
 
 var player := Vector2(800.0, 650.0)
 var realm_index := 0
@@ -14,14 +17,25 @@ var qi := 0
 var max_qi := 100
 var spirit_stones := 10
 var herbs := 0
+var health := MAX_HEALTH
+var game_over := false
+var enemies: Array[Vector2] = []
+var enemy_hps: Array[int] = []
+var enemy_spawn_timer := 6.0
+var enemy_attack_timer := 0.0
 var active_herbs: Array[bool] = [true, true, true, true, true]
 var messages: Array[String] = []
 var e_was_down := false
+var attack_was_down := false
 var elapsed := 0.0
 var touch_left := false
 var touch_right := false
 var touch_up := false
 var touch_down := false
+
+func _init() -> void:
+	for spawn_point in ENEMY_STARTS:
+		_spawn_enemy(spawn_point)
 
 func _ready() -> void:
 	_add_message("你来到青云山脚，开始自己的修仙之路。")
@@ -31,6 +45,13 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	elapsed += delta
+	if game_over:
+		var restart_down := Input.is_key_pressed(KEY_R)
+		if restart_down and not e_was_down:
+			_reset_game()
+		e_was_down = restart_down
+		queue_redraw()
+		return
 	var direction := Vector2.ZERO
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
 		direction.x -= 1.0
@@ -56,6 +77,15 @@ func _process(delta: float) -> void:
 	if e_down and not e_was_down:
 		_interact()
 	e_was_down = e_down
+	var attack_down := Input.is_key_pressed(KEY_SPACE) or Input.is_key_pressed(KEY_J)
+	if attack_down and not attack_was_down:
+		_attack()
+	attack_was_down = attack_down
+	_update_enemies(delta)
+	enemy_spawn_timer -= delta
+	if enemy_spawn_timer <= 0.0 and enemies.size() < 6:
+		_spawn_enemy(_random_spawn_point())
+		enemy_spawn_timer = 7.0
 	queue_redraw()
 
 func _build_touch_controls() -> void:
@@ -84,6 +114,14 @@ func _build_touch_controls() -> void:
 	interact.modulate = Color(1.0, 0.86, 0.52, 0.95)
 	interact.pressed.connect(_interact)
 	touch_ui.add_child(interact)
+	var attack := Button.new()
+	attack.text = "攻\n击"
+	attack.position = Vector2(420, 465)
+	attack.size = Vector2(82, 82)
+	attack.add_theme_font_size_override("font_size", 20)
+	attack.modulate = Color(1.0, 0.48, 0.45, 0.95)
+	attack.pressed.connect(_attack)
+	touch_ui.add_child(attack)
 
 func _make_touch_button(parent: Control, caption: String, button_position: Vector2, flag: StringName) -> void:
 	var button := Button.new()
@@ -100,6 +138,9 @@ func _set_touch_flag(flag: StringName, value: bool) -> void:
 	set(flag, value)
 
 func _interact() -> void:
+	if game_over:
+		_reset_game()
+		return
 	if player.distance_to(ALTAR) < 85.0:
 		_cultivate()
 		return
@@ -113,6 +154,68 @@ func _interact() -> void:
 			_add_message("你采集了一株灵草。当前灵草：%d" % herbs)
 			return
 	_add_message("附近没有可以互动的对象。")
+
+func _spawn_enemy(spawn_point: Vector2) -> void:
+	enemies.append(spawn_point)
+	enemy_hps.append(3)
+
+func _random_spawn_point() -> Vector2:
+	var side := randi() % 4
+	match side:
+		0: return Vector2(randf_range(80.0, WORLD_SIZE.x - 80.0), 130.0)
+		1: return Vector2(WORLD_SIZE.x - 80.0, randf_range(130.0, WORLD_SIZE.y - 80.0))
+		2: return Vector2(randf_range(80.0, WORLD_SIZE.x - 80.0), WORLD_SIZE.y - 80.0)
+		_: return Vector2(80.0, randf_range(130.0, WORLD_SIZE.y - 80.0))
+
+func _update_enemies(delta: float) -> void:
+	enemy_attack_timer -= delta
+	for i in enemies.size():
+		enemies[i] = enemies[i].move_toward(player, ENEMY_SPEED * delta)
+		if enemies[i].distance_to(player) < 32.0 and enemy_attack_timer <= 0.0:
+			health -= 1
+			enemy_attack_timer = 0.9
+			_add_message("妖兽咬伤了你，生命 -1。")
+			if health <= 0:
+				game_over = true
+				_add_message("你力竭倒下了，按 R 或点击互动按钮重新开始。")
+				return
+
+func _attack() -> void:
+	if game_over:
+		_reset_game()
+		return
+	var nearest := -1
+	var nearest_distance := 160.0
+	for i in enemies.size():
+		var distance := enemies[i].distance_to(player)
+		if distance <= nearest_distance:
+			nearest = i
+			nearest_distance = distance
+	if nearest < 0:
+		_add_message("前方没有进入攻击范围的妖兽。")
+		return
+	enemy_hps[nearest] -= 1
+	_add_message("你挥出一剑，妖兽受伤（剩余生命 %d）。" % enemy_hps[nearest])
+	if enemy_hps[nearest] <= 0:
+		enemies.remove_at(nearest)
+		enemy_hps.remove_at(nearest)
+	spirit_stones += 2
+	_add_message("妖兽被击败，获得 2 枚灵石。")
+
+func _reset_game() -> void:
+	player = Vector2(800.0, 650.0)
+	health = MAX_HEALTH
+	game_over = false
+	qi = 0
+	spirit_stones = 10
+	herbs = 0
+	active_herbs = [true, true, true, true, true]
+	enemies.clear()
+	enemy_hps.clear()
+	for spawn_point in ENEMY_STARTS:
+		_spawn_enemy(spawn_point)
+	messages.clear()
+	_add_message("你重新踏上了修仙之路。")
 
 func _cultivate() -> void:
 	if qi >= max_qi:
@@ -173,6 +276,13 @@ func _draw() -> void:
 		if active_herbs[i]:
 			draw_circle(HERB_POINTS[i] + camera, 14.0, Color("76d68e"))
 			draw_circle(HERB_POINTS[i] + camera + Vector2(0, -10), 8.0, Color("b6f28b"))
+	# 妖兽。
+	for i in enemies.size():
+		var enemy_screen := enemies[i] + camera
+		draw_circle(enemy_screen, 18.0, Color("c94f62"))
+		draw_circle(enemy_screen + Vector2(0, -9), 9.0, Color("f08b76"))
+		draw_rect(Rect2(enemy_screen - Vector2(18, 30), Vector2(36, 5)), Color("3a1720"), true)
+		draw_rect(Rect2(enemy_screen - Vector2(18, 30), Vector2(12.0 * enemy_hps[i], 5)), Color("e97b68"), true)
 	# 玩家。
 	draw_circle(player + camera, 18.0, Color("63c7e8"))
 	draw_circle(player + camera + Vector2(0, -9), 9.0, Color("d9f4ff"))
@@ -180,11 +290,15 @@ func _draw() -> void:
 	# 固定在屏幕上的状态栏。
 	draw_rect(Rect2(0, 0, 960, 88), Color(0.03, 0.06, 0.11, 0.95))
 	draw_string(ThemeDB.fallback_font, Vector2(24, 30), "自由修仙录", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color("f6d58b"))
-	draw_string(ThemeDB.fallback_font, Vector2(24, 61), "%s%d层   灵力 %d/%d   灵草 %d   灵石 %d" % [REALMS[realm_index], realm_layer, qi, max_qi, herbs, spirit_stones], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("d4e6f5"))
+	draw_string(ThemeDB.fallback_font, Vector2(24, 61), "%s%d层   生命 %d/%d   灵力 %d/%d   灵草 %d   灵石 %d" % [REALMS[realm_index], realm_layer, health, MAX_HEALTH, qi, max_qi, herbs, spirit_stones], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("d4e6f5"))
 	draw_rect(Rect2(650, 0, 310, 600), Color(0.03, 0.06, 0.11, 0.9))
 	draw_string(ThemeDB.fallback_font, Vector2(675, 42), "修行日志", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color("f6d58b"))
 	var log_text := "\n".join(messages)
 	draw_multiline_string(ThemeDB.fallback_font, Vector2(675, 78), log_text, HORIZONTAL_ALIGNMENT_LEFT, 260, 16, -1, Color("c4d4e8"))
 	draw_rect(Rect2(0, 550, 650, 50), Color(0.03, 0.06, 0.11, 0.9))
-	draw_string(ThemeDB.fallback_font, Vector2(24, 581), "WASD / 方向键移动    E 互动    目标：探索、采集、修炼、突破", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("c4d4e8"))
+	draw_string(ThemeDB.fallback_font, Vector2(24, 581), "WASD / 方向键移动    空格/J 攻击    E 互动    目标：探索、战斗、修炼、突破", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("c4d4e8"))
+	if game_over:
+		draw_rect(Rect2(190, 230, 410, 120), Color(0.03, 0.04, 0.08, 0.95))
+		draw_string(ThemeDB.fallback_font, Vector2(300, 280), "你已力竭", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color("ffb36b"))
+		draw_string(ThemeDB.fallback_font, Vector2(250, 320), "按 R 或点击互动按钮重开", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color("e0e8f2"))
 
