@@ -9,6 +9,8 @@ const ALTAR := Vector2(800.0, 470.0)
 const MERCHANT := Vector2(1060.0, 470.0)
 const HERB_POINTS: Array[Vector2] = [Vector2(420, 300), Vector2(580, 760), Vector2(1180, 240), Vector2(1330, 720), Vector2(300, 830)]
 const ENEMY_STARTS: Array[Vector2] = [Vector2(650, 650), Vector2(980, 760), Vector2(650, 280)]
+const EVENT_POINTS: Array[Vector2] = [Vector2(350, 500), Vector2(1240, 500), Vector2(470, 180)]
+const SAVE_PATH := "user://cultivation_save.json"
 
 var player := Vector2(800.0, 650.0)
 var realm_index := 0
@@ -24,9 +26,12 @@ var enemy_hps: Array[int] = []
 var enemy_spawn_timer := 6.0
 var enemy_attack_timer := 0.0
 var active_herbs: Array[bool] = [true, true, true, true, true]
+var event_used: Array[bool] = [false, false, false]
 var messages: Array[String] = []
 var e_was_down := false
 var attack_was_down := false
+var save_was_down := false
+var load_was_down := false
 var elapsed := 0.0
 var touch_left := false
 var touch_right := false
@@ -81,6 +86,14 @@ func _process(delta: float) -> void:
 	if attack_down and not attack_was_down:
 		_attack()
 	attack_was_down = attack_down
+	var save_down := Input.is_key_pressed(KEY_F5)
+	if save_down and not save_was_down:
+		_save_game()
+	save_was_down = save_down
+	var load_down := Input.is_key_pressed(KEY_F9)
+	if load_down and not load_was_down:
+		_load_game()
+	load_was_down = load_down
 	_update_enemies(delta)
 	enemy_spawn_timer -= delta
 	if enemy_spawn_timer <= 0.0 and enemies.size() < 6:
@@ -122,6 +135,20 @@ func _build_touch_controls() -> void:
 	attack.modulate = Color(1.0, 0.48, 0.45, 0.95)
 	attack.pressed.connect(_attack)
 	touch_ui.add_child(attack)
+	var save_button := Button.new()
+	save_button.text = "存档"
+	save_button.position = Vector2(350, 105)
+	save_button.size = Vector2(70, 38)
+	save_button.add_theme_font_size_override("font_size", 16)
+	save_button.pressed.connect(_save_game)
+	touch_ui.add_child(save_button)
+	var load_button := Button.new()
+	load_button.text = "读档"
+	load_button.position = Vector2(428, 105)
+	load_button.size = Vector2(70, 38)
+	load_button.add_theme_font_size_override("font_size", 16)
+	load_button.pressed.connect(_load_game)
+	touch_ui.add_child(load_button)
 
 func _make_touch_button(parent: Control, caption: String, button_position: Vector2, flag: StringName) -> void:
 	var button := Button.new()
@@ -153,7 +180,24 @@ func _interact() -> void:
 			herbs += 1
 			_add_message("你采集了一株灵草。当前灵草：%d" % herbs)
 			return
+	for i in EVENT_POINTS.size():
+		if not event_used[i] and player.distance_to(EVENT_POINTS[i]) < 65.0:
+			_trigger_event(i)
+			return
 	_add_message("附近没有可以互动的对象。")
+
+func _trigger_event(index: int) -> void:
+	event_used[index] = true
+	match index:
+		0:
+			qi = min(qi + 35, max_qi)
+			_add_message("你参悟古碑上的道痕，获得 35 点灵力。")
+		1:
+			health = MAX_HEALTH
+			_add_message("你在灵泉中打坐，生命完全恢复。")
+		_:
+			spirit_stones += 15
+			_add_message("你在废弃秘境找到宝箱，获得 15 枚灵石。")
 
 func _spawn_enemy(spawn_point: Vector2) -> void:
 	enemies.append(spawn_point)
@@ -210,12 +254,67 @@ func _reset_game() -> void:
 	spirit_stones = 10
 	herbs = 0
 	active_herbs = [true, true, true, true, true]
+	event_used = [false, false, false]
 	enemies.clear()
 	enemy_hps.clear()
 	for spawn_point in ENEMY_STARTS:
 		_spawn_enemy(spawn_point)
 	messages.clear()
 	_add_message("你重新踏上了修仙之路。")
+
+func _save_game() -> void:
+	var save_data := {
+		"player_x": player.x,
+		"player_y": player.y,
+		"realm_index": realm_index,
+		"realm_layer": realm_layer,
+		"qi": qi,
+		"max_qi": max_qi,
+		"spirit_stones": spirit_stones,
+		"herbs": herbs,
+		"health": health,
+		"active_herbs": active_herbs,
+		"event_used": event_used,
+		"messages": messages
+	}
+	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if file == null:
+		_add_message("存档失败，请稍后再试。")
+		return
+	file.store_string(JSON.stringify(save_data))
+	_add_message("进度已保存。")
+
+func _load_game() -> void:
+	if not FileAccess.file_exists(SAVE_PATH):
+		_add_message("还没有找到存档。")
+		return
+	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var parsed = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		_add_message("存档损坏，无法读取。")
+		return
+	player = Vector2(float(parsed.get("player_x", player.x)), float(parsed.get("player_y", player.y)))
+	realm_index = int(parsed.get("realm_index", realm_index))
+	realm_layer = int(parsed.get("realm_layer", realm_layer))
+	qi = int(parsed.get("qi", qi))
+	max_qi = int(parsed.get("max_qi", max_qi))
+	spirit_stones = int(parsed.get("spirit_stones", spirit_stones))
+	herbs = int(parsed.get("herbs", herbs))
+	health = clampi(int(parsed.get("health", health)), 1, MAX_HEALTH)
+	var saved_herbs: Array = parsed.get("active_herbs", [])
+	for i in active_herbs.size():
+		if i < saved_herbs.size():
+			active_herbs[i] = bool(saved_herbs[i])
+	var saved_events: Array = parsed.get("event_used", [])
+	for i in event_used.size():
+		if i < saved_events.size():
+			event_used[i] = bool(saved_events[i])
+	enemies.clear()
+	enemy_hps.clear()
+	for spawn_point in ENEMY_STARTS:
+		_spawn_enemy(spawn_point)
+	game_over = false
+	_add_message("进度已读取。")
 
 func _cultivate() -> void:
 	if qi >= max_qi:
@@ -276,6 +375,13 @@ func _draw() -> void:
 		if active_herbs[i]:
 			draw_circle(HERB_POINTS[i] + camera, 14.0, Color("76d68e"))
 			draw_circle(HERB_POINTS[i] + camera + Vector2(0, -10), 8.0, Color("b6f28b"))
+	# 一次性奇遇点。
+	for i in EVENT_POINTS.size():
+		if not event_used[i]:
+			draw_circle(EVENT_POINTS[i] + camera, 20.0, Color("a28ce8"))
+			draw_circle(EVENT_POINTS[i] + camera, 10.0, Color("e3c7ff"))
+		var event_name: String = ["古碑", "灵泉", "秘境"][i]
+		draw_string(ThemeDB.fallback_font, EVENT_POINTS[i] + camera + Vector2(-25, 38), event_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("e3c7ff"))
 	# 妖兽。
 	for i in enemies.size():
 		var enemy_screen := enemies[i] + camera
@@ -296,7 +402,7 @@ func _draw() -> void:
 	var log_text := "\n".join(messages)
 	draw_multiline_string(ThemeDB.fallback_font, Vector2(675, 78), log_text, HORIZONTAL_ALIGNMENT_LEFT, 260, 16, -1, Color("c4d4e8"))
 	draw_rect(Rect2(0, 550, 650, 50), Color(0.03, 0.06, 0.11, 0.9))
-	draw_string(ThemeDB.fallback_font, Vector2(24, 581), "WASD / 方向键移动    空格/J 攻击    E 互动    目标：探索、战斗、修炼、突破", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("c4d4e8"))
+	draw_string(ThemeDB.fallback_font, Vector2(24, 581), "WASD / 方向键移动    空格/J 攻击    E 互动    F5 存档 / F9 读档", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("c4d4e8"))
 	if game_over:
 		draw_rect(Rect2(190, 230, 410, 120), Color(0.03, 0.04, 0.08, 0.95))
 		draw_string(ThemeDB.fallback_font, Vector2(300, 280), "你已力竭", HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color("ffb36b"))

@@ -19,5 +19,13 @@ func _init() -> void:
 	game.qi = game.max_qi
 	game._cultivate()
 	assert(game.realm_layer == 2, "突破后应进入下一层")
+	game.player = game.EVENT_POINTS[0]
+	game._interact()
+	assert(game.event_used[0], "奇遇点互动后应被标记")
+	assert(game.qi == 35, "古碑奇遇应给予灵力")
+	game._save_game()
+	game.qi = 0
+	game._load_game()
+	assert(game.qi == 35, "读档后应恢复灵力")
 	print("free cultivation smoke test passed")
 	quit()
